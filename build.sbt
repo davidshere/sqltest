@@ -1,9 +1,9 @@
 ThisBuild / scalaVersion := "2.13.6"
 ThisBuild / organization := "org.davidshere"
 
-lazy val hello = (project in file("."))
+lazy val sqlTest = (project in file("."))
   .settings(
-    name := "Hello",
+    name := "SqlTest",
 
     libraryDependencies ++= Seq(
       // Test dependencies
@@ -11,10 +11,15 @@ lazy val hello = (project in file("."))
 
       // Connecting to a database
       "org.postgresql"  %  "postgresql"         % "42.2.23",
+      "ru.yandex.clickhouse" % "clickhouse-jdbc" % "0.3.1-patch",
+
 
       // Reading CSV and YAML
       "com.fasterxml.jackson.dataformat" % "jackson-dataformat-csv" % "2.12.4",
       "com.fasterxml.jackson.dataformat" % "jackson-dataformat-yaml" % "2.12.4",
+
+      // SQL Parsing
+      "com.github.jsqlparser" % "jsqlparser" % "4.1",
     ),
 
   )	 
