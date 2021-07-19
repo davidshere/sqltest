@@ -1,13 +1,12 @@
 CREATE TABLE person (
-  id int primary key,
-  firstname varchar(255),
-  lastname varchar(255),
-  zip varchar(10)
+  id int,
+  firstname String,
+  lastname String,
+  zip String
 ) engine = TinyLog;
 
 CREATE TABLE claims (
-  id int primary key,
+  id int,
   person_id int,
-  allowed_amt int,
-  constraint fk_person foreign key(person_id) references person(id)
+  allowed_amt int
 ) engine = TinyLog;

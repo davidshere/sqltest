@@ -55,18 +55,24 @@ class PGInterface extends DBInterface {
     val stmt = conn.createStatement()
 
     stmt.executeQuery(query)
+  }
 
-    val testDBName = s"test_database_${Random.alphanumeric.take(6).mkString}"
+  val testDBName = s"test_database_${Random.alphanumeric.take(6).mkString}"
 
-    def createTestDB = {
-      val sql = s"CREATE DATABASE ${testDBName}"
-      stmt.executeUpdate(sql)
-    }
+  def createTestDB = {
+    val sql = s"CREATE DATABASE ${testDBName}"
+    val conn = getConn
+    val stmt = conn.createStatement()
+    stmt.executeUpdate(sql)
+    conn.close()
+  }
 
-    def destroyTestDB = {
-      val sql = s"DROP DATABASE ${testDBName}"
-      stmt.executeUpdate(sql)
-    }
+  def destroyTestDB = {
+    val sql = s"DROP DATABASE ${testDBName}"
+    val conn = getConn
+    val stmt = conn.createStatement()
+    stmt.executeUpdate(sql)
+    conn.close()
   }
 }
 
@@ -102,38 +108,47 @@ object SqlTest extends App {
 
 
 
-  /*
 
 
  /*
   *
   */
   def setUp = {
-    val schema: String = getTestSchema("table2.sql")
-    val names = schema.strip.split(";").flatMap(getTableNameFromCreateTable(_))
-    names.foreach(n => createdTables += n)
+    val chi = new ClickHouseInterface()
+    val schema: String = ResourceManager.getTestSchema("table2.sql")
+
+    val createTableStatments = schema.strip.split(';')
+
+    val names = createTableStatments.flatMap(SQLParser.getTableNameFromCreateTable(_))
+
+    createTableStatments.foreach(stmt => {
+      chi.executeQuery(stmt)
+      createdTables += SQLParser.getTableNameFromCreateTable(stmt).head
+    })
   }
 
 
   def tearDown = {
-    // createdTables.foreach(tbl => stmt.executeUpdate(s"DROP TABLE ${tbl}")
-    conn.close()
+    val chi = new ClickHouseInterface()
+    createdTables.foreach(tbl => chi.executeQuery(s"DROP TABLE ${tbl}"))
   }
-  */
 
   def main = {
-    // setUp
-    val chi = new ClickHouseInterface()
-    val ddl: String = ResourceManager.getTestSchema("table2.csv")
-    val r = chi.executeQuery("create table t1 (v1 int) engine = TinyLog;")
+    setUp
+    // val chi = new ClickHouseInterface()
+    // val ddl: String = ResourceManager.getTestSchema("table2.sql")
+
+    // ddl.strip.split(";").foreach(chi.executeQuery(_))
+    println(createdTables)
+    // val r = chi.executeQuery(ddl)
+    // println(r)
     /*
     while (r.next()) {
       println(r.getInt(1), r.getString(2))
     }
     */
 
-    r
-    // tearDown
+    tearDown
   }
 
   main
