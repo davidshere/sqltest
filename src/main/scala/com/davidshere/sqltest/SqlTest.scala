@@ -1,8 +1,9 @@
 package com.davidshere.sqltest
 
-import java.sql.{Connection, DriverManager, ResultSet, Statement}
+import java.io.File
+import java.sql.{Connection, DriverManager, JDBCType, ResultSet, Types}
+import java.util
 import java.util.{HashMap, Map}
-
 
 import scala.collection.mutable.ListBuffer
 import scala.util.Random
@@ -14,6 +15,7 @@ import net.sf.jsqlparser.statement.{Statement => ParserStatement}
 import net.sf.jsqlparser.statement.select.Select
 import net.sf.jsqlparser.util.TablesNamesFinder
 import ru.yandex.clickhouse.{ClickHouseConnection, ClickHouseDataSource, ClickHouseStatement}
+import ru.yandex.clickhouse.domain.ClickHouseFormat
 import ru.yandex.clickhouse.settings.ClickHouseQueryParam
 
 trait DBInterface {
@@ -94,28 +96,14 @@ object SQLParser {
   }
 }
 
-object ResourceManager {
-
-  def getTestSchema(filename: String): String = Source.fromResource(filename).mkString
-
-  def getCsvData(filename: String): String = Source.fromResource(filename).mkString
-
-}
 
 object SqlTest extends App {
 
   val createdTables = new ListBuffer[String]()
 
-
-
-
-
- /*
-  *
-  */
   def setUp = {
     val chi = new ClickHouseInterface()
-    val schema: String = ResourceManager.getTestSchema("table2.sql")
+    val schema: String = Source.fromResource("table2.sql").mkString
 
     val createTableStatments = schema.strip.split(';')
 
@@ -125,6 +113,70 @@ object SqlTest extends App {
       chi.executeQuery(stmt)
       createdTables += SQLParser.getTableNameFromCreateTable(stmt).head
     })
+
+
+    val conn = chi.getConn
+    val stmt = conn.createStatement()
+    stmt
+      .write()
+      .table("default.claims")
+      .option("format_csv_delimiter", ",")
+      .data(new File("/home/davidshere/src/sqltest/src/main/resources/claims.csv"), ClickHouseFormat.CSVWithNames)
+      .send()
+
+    conn.close()
+  }
+
+  def run = {
+    val query: String = Source.fromResource("hcc.sql").mkString
+    val chi = new ClickHouseInterface()
+    val result = chi.executeQuery(query)
+    val transformedResult = transformResult(result)
+
+  }
+
+  private def rowToMap(result: ResultSet, columnNames: List[String], columnTypes: List[JDBCType]): List[(String, AnyRef)] = {
+    return columnNames.map(n => n -> result.getObject(n))
+    /*
+    (columnNames zip columnTypes).map({
+        case (n, JDBCType.INTEGER) => n -> result.getInt(n)
+        case (n, JDBCType.BIGINT) => n -> result.getInt(n)
+        case (n, JDBCType.VARCHAR) => n -> result.getString(n)
+        case (n, _) => n -> result.getObject(n)
+      })
+
+     */
+    }
+
+  private def transformResult(result: ResultSet) = { //: List[Map[String, AnyVal]] =
+
+    val columnCount = result.getMetaData.getColumnCount
+    val columnNames = (1 to columnCount).map(result.getMetaData.getColumnName).toList
+    val columnTypes = (1 to columnCount).map(result.getMetaData.getColumnType).map(JDBCType.valueOf(_)).toList
+
+    val i = Iterator
+      .continually(result.next)
+      .takeWhile(identity)
+      .map {_ => rowToMap(result, columnNames, columnTypes).toMap}
+        .toList
+
+    println(i)
+    println(columnNames zip columnTypes)
+    /*
+ }
+    })
+    while (result.next() != null) {
+      val m: Map[String, AnyVal] = new HashMap[String, AnyVal]()
+      columnNames.zip(columnTypes) match {
+        case e: (_, JDBCType) =>
+      }
+    }
+    */
+//    println(result)
+  }
+
+  def compare(result: ResultSet, expected: List[Map[String, AnyVal]]) = {
+
   }
 
 
@@ -134,21 +186,18 @@ object SqlTest extends App {
   }
 
   def main = {
-    setUp
-    // val chi = new ClickHouseInterface()
-    // val ddl: String = ResourceManager.getTestSchema("table2.sql")
+    try {
+      setUp
+      println(createdTables)
+      run
+    } catch {
+      case e: Throwable => throw e
 
-    // ddl.strip.split(";").foreach(chi.executeQuery(_))
-    println(createdTables)
-    // val r = chi.executeQuery(ddl)
-    // println(r)
-    /*
-    while (r.next()) {
-      println(r.getInt(1), r.getString(2))
     }
-    */
+    finally {
+      tearDown
+    }
 
-    tearDown
   }
 
   main
