@@ -23,6 +23,11 @@ class SqlTestSpec extends AnyFunSuite {
   test("Parse should parse table names from CREATE") {
     val stmt = "CREATE TABLE table1 (val1 INT PRIMARY KEY)"
     assert(SQLParser.getTableNameFromCreateTable(stmt) == List("table1"))
+  }
 
+  test("Parse should flatten subqueries into an ordered list") {
+    val query = "SELECT * FROM claims cl JOIN (SELECT * FROM person) as p on p.id = cl.person_id"
+    println(SQLParser.getSubQueriesInOrder(query))
+    assert(false)
   }
 }

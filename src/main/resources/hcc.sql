@@ -1,5 +1,4 @@
 SELECT
-  'string' as other_value,
   person_id,
   SUM(allowed_amt) AS high_cost_claims
 FROM claims
