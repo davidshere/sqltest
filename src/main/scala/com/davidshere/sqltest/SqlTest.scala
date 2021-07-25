@@ -1,6 +1,6 @@
 package com.davidshere.sqltest
 
-import java.io.File
+import java.io.{File, InputStream}
 import java.sql.{Connection, DriverManager, JDBCType, ResultSet, Types}
 import java.util
 import java.util.{HashMap, Map => JMap, ArrayList}
@@ -8,9 +8,8 @@ import java.util.{HashMap, Map => JMap, ArrayList}
 import com.fasterxml.jackson.dataformat.csv.{CsvMapper, CsvParser}
 
 import scala.collection.mutable.ListBuffer
-import scala.util.Random
 import scala.io.Source
-import scala.jdk.CollectionConverters._
+import collection.JavaConverters._
 import net.sf.jsqlparser.parser.CCJSqlParserUtil
 import net.sf.jsqlparser.statement.create.table.CreateTable
 import net.sf.jsqlparser.statement.{Statement => ParserStatement}
@@ -86,7 +85,6 @@ object SQLParser {
     val plainSelect = statement.asInstanceOf[Select].getSelectBody.asInstanceOf[PlainSelect]
     val joins: List[Join] = plainSelect.getJoins.asScala.toList
     val join: Join = joins(0)
-    println(join.getRightItem)
 
   }
 }
@@ -95,72 +93,6 @@ object SQLParser {
 object SqlTest extends App {
 
   val createdTables = new ListBuffer[String]()
-
-  def setUp(): Unit = {
-    val chi = new ClickHouseInterface()
-    val schema: String = Source.fromResource("table2.sql").mkString
-
-    val createTableStatments = schema.strip.split(';')
-
-    val names = createTableStatments.flatMap(SQLParser.getTableNameFromCreateTable(_))
-
-    createTableStatments.foreach(stmt => {
-      chi.executeQuery(stmt)
-      createdTables += SQLParser.getTableNameFromCreateTable(stmt).head
-    })
-
-
-    val conn = chi.getConn
-    val stmt = conn.createStatement()
-    stmt
-      .write()
-      .table("default.claims")
-      .option("format_csv_delimiter", ",")
-      .data(new File("/home/davidshere/src/sqltest/src/main/resources/claims.csv"), ClickHouseFormat.CSVWithNames)
-      .send()
-
-    conn.close()
-  }
-
-  def run(): Unit = {
-    val query: String = Source.fromResource("hcc.sql").mkString
-    val chi = new ClickHouseInterface()
-    val result = chi.executeQuery(query)
-
-    val expectedFile = new File("/home/davidshere/src/sqltest/src/main/resources/expected.csv")
-    val expected = getExpected(expectedFile)
-    println(compare(result, expected))
-  }
-
-  private def getExpected(file: File):List[Map[String, String]] = {
-    val mapper = new CsvMapper()
-    mapper.enable(CsvParser.Feature.WRAP_AS_ARRAY)
-    val rows = mapper.readerFor(classOf[util.List[String]]).readValues[ArrayList[String]](file).readAll().asScala.map(_.asScala.toList).toList
-
-    rows.tail.map(rows.head zip _).map(_.toMap).toList
-  }
-
-  private def transformResult(result: ResultSet): List[scala.collection.immutable.Map[String, String]] = {
-
-    val columnCount = result.getMetaData.getColumnCount
-    val columnNames = (1 to columnCount).map(result.getMetaData.getColumnName).toList
-
-    Iterator
-      .continually(result.next)
-      .takeWhile(identity)
-      .map {_ => columnNames.map(n => n -> result.getString(n)).toMap}
-      .toList
-
-  }
-
-  def compare(result: ResultSet, expected: List[Map[String, String]]): Boolean = transformResult(result).equals(expected)
-
-
-
-  def tearDown(): Unit = {
-    val chi = new ClickHouseInterface()
-    createdTables.foreach(tbl => chi.executeQuery(s"DROP TABLE $tbl"))
-  }
 
   def main(): Unit = {
     try {
@@ -173,8 +105,82 @@ object SqlTest extends App {
     finally {
       tearDown()
     }
+  }
+
+  def setUp(): Unit = {
+    val chi = new ClickHouseInterface()
+    val schema: String = Source.fromResource("table2.sql").mkString
+
+    val createTableStatements = schema.strip.split(';')
+    createTableStatements.foreach(stmt => {
+      chi.executeQuery(stmt)
+      createdTables += SQLParser.getTableNameFromCreateTable(stmt).head
+    })
+
+    val csv: InputStream = getClass.getClassLoader.getResourceAsStream("claims.csv")
+    loadToDbFromCsv("default.claims", csv)
+  }
+
+
+  def run(): Unit = {
+    val query: String = Source.fromResource("hcc.sql").mkString
+    val chi = new ClickHouseInterface()
+    val result = chi.executeQuery(query)
+
+    val expectedFile = new File("/home/davidshere/src/sqltest/src/main/resources/expected.csv")
+    val expected = getExpected(expectedFile)
+    println(compare(result, expected))
+  }
+
+  def tearDown(): Unit = {
+    val chi = new ClickHouseInterface()
+    println(createdTables)
+    createdTables.foreach(tbl => chi.executeQuery(s"DROP TABLE $tbl"))
+  }
+
+  private def loadToDbFromCsv(tableName: String, csv: InputStream): Unit = {
+    val chi = new ClickHouseInterface
+    val conn = chi.getConn
+    val stmt = conn.createStatement()
+    stmt
+      .write()
+      .table(tableName)
+      .option("format_csv_delimiter", ",")
+      .data(csv, ClickHouseFormat.CSVWithNames)
+      .send()
+
+    conn.close()
+  }
+
+
+  private def getExpected(file: File):List[Map[String, String]] = {
+    val mapper = new CsvMapper()
+    mapper.enable(CsvParser.Feature.WRAP_AS_ARRAY)
+    val rows = mapper.readerFor(classOf[util.List[String]]).readValues[ArrayList[String]](file).readAll().asScala.map(_.asScala.toList).toList
+
+    rows.tail.map(rows.head zip _).map(_.toMap).toList
+  }
+
+  private def transformResult(result: ResultSet): List[Map[String, String]] = {
+
+    val columnCount = result.getMetaData.getColumnCount
+    val columnNames = (1 to columnCount).map(result.getMetaData.getColumnName).toList
+
+    Iterator
+      .continually(result.next)
+      .takeWhile(identity)
+      .map {_ => columnNames.map(n => n -> result.getString(n)).toMap}
+      .toList
 
   }
+
+  private def compare(result: ResultSet, expected: List[Map[String, String]]): Boolean = transformResult(result).equals(expected)
+
+
+
+
+
+
 
   main()
 }
