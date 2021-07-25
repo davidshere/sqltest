@@ -49,6 +49,10 @@ class ClickHouseInterface extends DBInterface {
   }
 }
 
+class SparkInterface {
+
+}
+
 class PGInterface extends DBInterface {
   override val driverClassName: String = "org.postgresql.Driver"
   def getConn: Connection = DriverManager.getConnection(s"jdbc:postgresql://0.0.0.0:5432/postgres")
@@ -177,10 +181,42 @@ object SqlTest extends App {
   private def compare(result: ResultSet, expected: List[Map[String, String]]): Boolean = transformResult(result).equals(expected)
 
 
+  //main()
+  // Inspired by https://github.com/tmalaska/SparkUnitTestingExamples
+  import org.apache.spark.{SparkConf, SparkContext}
+  import org.apache.spark.sql.SparkSession
+  /*
+  val sparkConfig = new SparkConf()
+  sparkConfig.set("spark.broadcast.compress", "false")
+  sparkConfig.set("spark.shuffle.compress", "false")
+  sparkConfig.set("spark.shuffle.spill.compress", "false")
+  sparkConfig.set("spark.io.compression.codec", "false")
+  val sc = new SparkContext("local[2]", "unit test", sparkConfig)
+  */
 
+  val spark = SparkSession
+    .builder()
+    .appName("unit test")
+    .master("local[2]")
+    .config("spark.broadcast.compress", "false")
+    .config("spark.shuffle.compress", "false")
+    .config("spark.shuffle.spill.compress", "false")
+    .getOrCreate()
 
+  val personPath = getClass.getClassLoader.getResource("person.csv").getPath.mkString
+  try {
 
+    val personDf = spark.read.option("header", "true").csv("src/main/resources/person.csv")
+    val claimsDf = spark.read.option("header", "true").csv("src/main/resources/claims.csv")
+    personDf.createOrReplaceTempView("person")
+    claimsDf.createOrReplaceTempView("claims")
+    val query = Source.fromResource("hcc.sql").mkString
+    val res = spark.sql(query)
+    println("--")
+    val result = res.collect()
+    val coll = (res.collect.map(r => Map(res.columns.zip(r.toSeq): _*)))
+    println(coll.toString)
 
-
-  main()
+  }
+  finally { spark.close }
 }
