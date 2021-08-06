@@ -3,9 +3,13 @@ package com.davidshere.sqltest
 import java.io.{File, InputStream}
 import java.sql.{Connection, DriverManager, JDBCType, ResultSet, Types}
 import java.util
-import java.util.{HashMap, Map => JMap, ArrayList}
+import java.util.{ArrayList, HashMap, Map => JMap}
 
+import com.davidshere.sqltest.SqlTest.{getClass, getExpected}
 import com.fasterxml.jackson.dataformat.csv.{CsvMapper, CsvParser}
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions.col
+import org.apache.spark.sql.types.StringType
 
 import scala.collection.mutable.ListBuffer
 import scala.io.Source
@@ -20,16 +24,30 @@ import ru.yandex.clickhouse.domain.ClickHouseFormat
 import ru.yandex.clickhouse.settings.ClickHouseQueryParam
 
 trait DBInterface {
+  def executeQuery(query: String): List[Map[String, String]]
+  def loadCsvToDb(path: String, tableName: String): Unit
+}
+
+trait JDBCInterface extends DBInterface {
   val driverClassName: String
   def setupDriver(): Unit = Class.forName(driverClassName)
 
   def getConn: Connection
 
-  def executeQuery(query: String): ResultSet
+  def transformResult(result: ResultSet): List[Map[String, String]] = {
 
+    val columnCount = result.getMetaData.getColumnCount
+    val columnNames = (1 to columnCount).map(result.getMetaData.getColumnName).toList
+
+    Iterator
+      .continually(result.next)
+      .takeWhile(identity)
+      .map {_ => columnNames.map(n => n -> result.getString(n)).toMap}
+      .toList
+  }
 }
 
-class ClickHouseInterface extends DBInterface {
+class ClickHouseInterface extends JDBCInterface {
   val driverClassName = "ru.yandex.clickhouse.ClickHouseDriver"
   def getConn: ClickHouseConnection = {
     val url = "jdbc:clickhouse://172.17.0.1:8123"
@@ -38,34 +56,76 @@ class ClickHouseInterface extends DBInterface {
     dataSource.getConnection
   }
 
-  def executeQuery(query: String): ResultSet =  {
+  def executeQuery(query: String): List[Map[String, String]] =  {
     val conn: ClickHouseConnection = getConn
     val stmt: ClickHouseStatement = conn.createStatement()
     val params: JMap[ClickHouseQueryParam, String] = new HashMap()
 
     val res = stmt.executeQuery(query, params)
     conn.close()
-    res
+    transformResult(res)
+  }
+
+  def loadCsvToDb(tableName: String, csv: InputStream): Unit = {
+    val chi = new ClickHouseInterface
+    val conn = chi.getConn
+    val stmt = conn.createStatement()
+    stmt
+      .write()
+      .table(tableName)
+      .option("format_csv_delimiter", ",")
+      .data(csv, ClickHouseFormat.CSVWithNames)
+      .send()
+
+    conn.close()
   }
 }
 
-class SparkInterface {
 
-}
-
-class PGInterface extends DBInterface {
+class PGInterface extends JDBCInterface {
   override val driverClassName: String = "org.postgresql.Driver"
   def getConn: Connection = DriverManager.getConnection(s"jdbc:postgresql://0.0.0.0:5432/postgres")
 
-  override def executeQuery(query: String): ResultSet = {
+  override def executeQuery(query: String): List[Map[String, String]] = {
     val conn = getConn
     val stmt = conn.createStatement()
 
-    stmt.executeQuery(query)
+    val res = stmt.executeQuery(query)
+    transformResult(res)
   }
+
+  override def loadCsvToDb(path: String, tableName: String): Unit = {}
 
 }
 
+class SparkInterface extends DBInterface {
+
+  def loadCsvToDb(path: String, tableName: String): Unit = {
+    val df = spark.read.option("header", "true").csv(path=path)
+    df.createOrReplaceTempView(tableName)
+  }
+
+  override def executeQuery(query: String): List[Map[String, String]] = {
+    val result = spark.sql(query)
+    val stringResult = result.select(result.columns.map(c => col(c).cast(StringType)): _*)
+
+    stringResult.collect.map(r => Map(stringResult.columns.zip(r.toSeq): _*)).toList
+  }
+
+  def tearDown(): Unit = {
+    spark.close()
+  }
+
+  val spark = SparkSession
+    .builder()
+    .appName("unit test")
+    .master("local[2]")
+    .config("spark.broadcast.compress", "false")
+    .config("spark.shuffle.compress", "false")
+    .config("spark.shuffle.spill.compress", "false")
+    .getOrCreate()
+
+}
 object SQLParser {
   def getTableNameFromSimpleQuery(query: String): List[String] = {
     val statement: ParserStatement = CCJSqlParserUtil.parse(query)
@@ -90,6 +150,7 @@ object SQLParser {
     val joins: List[Join] = plainSelect.getJoins.asScala.toList
     val join: Join = joins(0)
 
+
   }
 }
 
@@ -97,7 +158,7 @@ object SQLParser {
 object SqlTest extends App {
 
   val createdTables = new ListBuffer[String]()
-
+  /*
   def main(): Unit = {
     try {
       setUp()
@@ -110,7 +171,7 @@ object SqlTest extends App {
       tearDown()
     }
   }
-
+  */
   def setUp(): Unit = {
     val chi = new ClickHouseInterface()
     val schema: String = Source.fromResource("table2.sql").mkString
@@ -142,19 +203,7 @@ object SqlTest extends App {
     createdTables.foreach(tbl => chi.executeQuery(s"DROP TABLE $tbl"))
   }
 
-  private def loadToDbFromCsv(tableName: String, csv: InputStream): Unit = {
-    val chi = new ClickHouseInterface
-    val conn = chi.getConn
-    val stmt = conn.createStatement()
-    stmt
-      .write()
-      .table(tableName)
-      .option("format_csv_delimiter", ",")
-      .data(csv, ClickHouseFormat.CSVWithNames)
-      .send()
 
-    conn.close()
-  }
 
 
   private def getExpected(file: File):List[Map[String, String]] = {
@@ -165,26 +214,13 @@ object SqlTest extends App {
     rows.tail.map(rows.head zip _).map(_.toMap).toList
   }
 
-  private def transformResult(result: ResultSet): List[Map[String, String]] = {
 
-    val columnCount = result.getMetaData.getColumnCount
-    val columnNames = (1 to columnCount).map(result.getMetaData.getColumnName).toList
-
-    Iterator
-      .continually(result.next)
-      .takeWhile(identity)
-      .map {_ => columnNames.map(n => n -> result.getString(n)).toMap}
-      .toList
-
-  }
 
   private def compare(result: ResultSet, expected: List[Map[String, String]]): Boolean = transformResult(result).equals(expected)
 
 
   //main()
   // Inspired by https://github.com/tmalaska/SparkUnitTestingExamples
-  import org.apache.spark.{SparkConf, SparkContext}
-  import org.apache.spark.sql.SparkSession
   /*
   val sparkConfig = new SparkConf()
   sparkConfig.set("spark.broadcast.compress", "false")
@@ -193,30 +229,9 @@ object SqlTest extends App {
   sparkConfig.set("spark.io.compression.codec", "false")
   val sc = new SparkContext("local[2]", "unit test", sparkConfig)
   */
+  def main(): Unit = {
 
-  val spark = SparkSession
-    .builder()
-    .appName("unit test")
-    .master("local[2]")
-    .config("spark.broadcast.compress", "false")
-    .config("spark.shuffle.compress", "false")
-    .config("spark.shuffle.spill.compress", "false")
-    .getOrCreate()
-
-  val personPath = getClass.getClassLoader.getResource("person.csv").getPath.mkString
-  try {
-
-    val personDf = spark.read.option("header", "true").csv("src/main/resources/person.csv")
-    val claimsDf = spark.read.option("header", "true").csv("src/main/resources/claims.csv")
-    personDf.createOrReplaceTempView("person")
-    claimsDf.createOrReplaceTempView("claims")
-    val query = Source.fromResource("hcc.sql").mkString
-    val res = spark.sql(query)
-    println("--")
-    val result = res.collect()
-    val coll = (res.collect.map(r => Map(res.columns.zip(r.toSeq): _*)))
-    println(coll.toString)
 
   }
-  finally { spark.close }
+  main
 }
